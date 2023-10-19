@@ -2,6 +2,8 @@ import spotipy
 import spotipy.util as util
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.preprocessing import StandardScaler  
 from sklearn.metrics.pairwise import linear_kernel
 from sklearn.preprocessing import normalize
@@ -163,7 +165,6 @@ class SpotipyClient():
             
             for track in album_tracks:
                 track_info = {
-                    'id': track['id'],
                     'name': track['name'],
                     'artist': track['artists'][0]['name']
                 }
@@ -220,17 +221,15 @@ class SpotipyClient():
 
         return candidates_df
     
-   
-    def custom_pca(self, dataframe, n_components):
+#                            Optimizacion
+    def calculo_pca(self, dataframe, n_components):
         """
         Implementación del Análisis de Componentes Principales (PCA) en un DataFrame.
-
         Argumentos:
             - dataframe: Un DataFrame de pandas que contiene los datos.
             - n_components: El número de componentes principales que se deben retener.
-
         Return:
-            - Los datos transformados con PCA como un DataFrame.
+            - transformed_dataframe: Datos transformados con PCA como un DataFrame.
         """
         # Convertir el DataFrame a una matriz numpy
         data = dataframe.iloc[:, 1:].to_numpy()
@@ -255,11 +254,18 @@ class SpotipyClient():
         
         return transformed_dataframe
     
-    
-    def custom_cossim(self, top_tracks_df, candidates_df):
-        '''Calcula la similitud del coseno entre cada top_track y cada pista
-        candidata en candidates_df. Retorna matriz de n_top_tracks x n_candidates_df'''
-        print(text2art("3.  Metrica ", font="big"))
+#                                 Metrica 
+    def simil_cos(self, top_tracks_df, candidates_df):
+        '''
+            Calcula la similitud del coseno entre cada top_track y cada pista
+            candidata en candidates_df. Retorna matriz de n_top_tracks x n_candidates_df
+            Argumentos: 
+                - top_tracks_df : Un dataframe con las canciones del top20
+                - candidates_df : Un dataframe con las cnaciones candidatas 
+            Return:
+                - cos_simil: matris que contiene la similitud coseno
+        '''
+
 
         top_tracks_mtx = top_tracks_df.iloc[:,1:].values
         candidates_mtx = candidates_df.iloc[:,1:].values
@@ -279,10 +285,9 @@ class SpotipyClient():
         candidates = can_scaled/can_norm.reshape(n_candidates,1)
 
         # Calcular similitudes del coseno
-        cos_sim = linear_kernel(top_tracks,candidates)
-
-        return cos_sim
-
+        cos_simil = linear_kernel(top_tracks,candidates)
+        
+        return cos_simil
 
  #                          aprendizaje no supervisado
     def cluster_tracks(self, top_tracks_df, n_clusters):
@@ -293,21 +298,18 @@ class SpotipyClient():
         Return:
             cluster_labels : Una lista de etiquetas de clúster para cada pista.
         '''
-        print(text2art("4.  Aprendizaje  ", font="big"))
-
         # Extraer las características relevantes para el clustering
         features = top_tracks_df.iloc[:, 1:].values
         # Crear una instancia del modelo K-Means con el número de clústeres deseado
-        kmeans = KMeans(n_clusters=n_clusters, random_state=0)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=0,n_init='auto')
         # Entrenar el modelo K-Means
         kmeans.fit(features)
         # Obtener las etiquetas de clúster para cada pista
         cluster_labels = kmeans.labels_
-        print(cluster_labels)
         return cluster_labels
     
 
-    def busqueda_en_anchura_top_20(self, pca_top_canciones_df, pca_canciones_candidatas_df, n_clusters, umbral):
+    def BFS(self, pca_top_20_df,Kmeans_top_20, Kmeans_candidatas,cos_sim, umbral):
         '''Realizar una búsqueda en anchura (BFS) basada en similitud de coseno
            para encontrar una canción candidata en la lista de candidatas para cada canción del top 20
            que cumpla ciertas condiciones y comparar con las canciones candidatas.
@@ -320,20 +322,14 @@ class SpotipyClient():
         Return:
             -canciones_candidatas: Lista de índices de canciones candidatas para cada canción del top 20.
         '''
-
-        # Obtener las etiquetas de clúster para todas las canciones del top 20 y candidatas
-        Kmeans_top_20_df = self.cluster_tracks(pca_top_canciones_df, n_clusters)
-        Kmeans_candidatas_df = self.cluster_tracks(pca_canciones_candidatas_df, n_clusters)
-        cos_sim = self.custom_cossim(pca_top_canciones_df,pca_canciones_candidatas_df)
-        
         # Inicializar la lista para almacenar las canciones candidatas para cada canción del top 20
         recomendaciones =[]
 
         # Iterar sobre cada canción del top 20
-        for fila in range(pca_top_canciones_df.shape[0]): 
+        for fila in range(pca_top_20_df.shape[0]): 
 
             # Obtener el índice de la canción actual en el top 20
-            indice_cancion_actual = pca_top_canciones_df.index[fila]
+            indice_cancion_actual = pca_top_20_df.index[fila]
             
             # Inicializar una cola de prioridad (ordenada por similitud de coseno)
             cola_prioridad = deque([(indice_cancion_actual, 1.0)])  # Tuplas (índice, similitud)
@@ -343,8 +339,10 @@ class SpotipyClient():
             cancion_candidata_actual = None
 
             while cola_prioridad and not cancion_candidata_actual:
-             #el bucle continuará mientras  la cola de prioridad no este vacia 
-             # y mientras no se haya encontrado una canción candidata que cumple con las condiciones
+                '''
+                    el bucle continuará mientras  la cola de prioridad no este vacia 
+                    y mientras no se haya encontrado una canción candidata que cumple con las condiciones
+                ''' 
                 # Extraer el elemento de la cola con la mayor similitud
                 indice_actual, similitud_actual = cola_prioridad.pop()
                 # Marcar como visitado
@@ -355,13 +353,13 @@ class SpotipyClient():
                     cancion_candidata_actual = indice_actual
 
                 # Obtener las canciones vecinas (todas las canciones en el mismo clúster)
-                vecinos = [i for i, etiqueta in enumerate(Kmeans_candidatas_df) if etiqueta == Kmeans_top_20_df[indice_cancion_actual]]
+                vecinos = [i for i, etiqueta in enumerate(Kmeans_candidatas) if etiqueta == Kmeans_top_20[indice_cancion_actual]]
                 # Ordenar las canciones vecinas por similitud de coseno en orden descendente
-                vecinos.sort(key=lambda x: cos_sim[fila][x], reverse=True)
+                vecinos.sort(key=lambda x: cos_sim[indice_cancion_actual][x], reverse=True)
                 # Agregar las canciones vecinas no visitadas a la cola de prioridad
                 for vecino in vecinos:
                     if vecino not in visitados:
-                        cola_prioridad.appendleft((vecino, cos_sim[fila][vecino]))
+                        cola_prioridad.appendleft((vecino, cos_sim[indice_cancion_actual][vecino]))
 
             # Agregar la comparación de similitud con la canción candidata
             if cancion_candidata_actual is not None and cancion_candidata_actual  not in recomendaciones:
